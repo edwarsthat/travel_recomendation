@@ -4,108 +4,137 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearBtn = document.getElementById('clearBtn');
     const recommendationsDiv = document.getElementById('recommendations');
 
+    // Palabras clave aceptadas (case-insensitive; se usa toLowerCase() en runtime)
+    const BEACH_KEYWORDS = new Set(['beach', 'beaches', 'playa', 'playas']);
+    const TEMPLE_KEYWORDS = new Set(['temple', 'temples', 'templo', 'templos']);
+    const COUNTRY_KEYWORDS = new Set(['country', 'countries', 'pais', 'país', 'paises']);
+
+    // --- Opcional: reloj por recomendación ---
+    // Opciones comunes para mostrar hora local
+    const CLOCK_OPTIONS = { hour12: true, hour: 'numeric', minute: 'numeric', second: 'numeric' };
+
+    // Mapeo básico de destinos a zonas horarias IANA (según los datos del JSON)
+    function getTimeZoneForItem(name) {
+        const n = (name || '').toLowerCase();
+        // Ciudades de Australia
+        if (n.includes('sydney')) return 'Australia/Sydney';
+        if (n.includes('melbourne')) return 'Australia/Melbourne';
+        // Ciudades de Japón
+        if (n.includes('tokyo') || n.includes('kyoto') || n.includes('japan')) return 'Asia/Tokyo';
+        // Brasil
+        if (n.includes('rio de janeiro') || n.includes('são paulo') || n.includes('sao paulo') || n.includes('brazil')) return 'America/Sao_Paulo';
+        // Playas
+        if (n.includes('bora bora') || n.includes('french polynesia')) return 'Pacific/Tahiti';
+        // Templos
+        if (n.includes('angkor') || n.includes('cambodia')) return 'Asia/Phnom_Penh';
+        if (n.includes('taj mahal') || n.includes('india')) return 'Asia/Kolkata';
+        return null; // sin zona horaria conocida
+    }
+
+    function formatLocalTime(tz) {
+        try {
+            return new Date().toLocaleTimeString('en-US', { ...CLOCK_OPTIONS, timeZone: tz });
+        } catch { return ''; }
+    }
+
+    // Control de intervalos activos para evitar fugas cuando se regeneran resultados
+    const activeClocks = [];
+    function clearActiveClocks() {
+        activeClocks.forEach(id => clearInterval(id));
+        activeClocks.length = 0;
+    }
+
+    // Cache en memoria para evitar múltiples fetch y errores intermitentes
+    let dataCache = null;
+    async function getData() {
+        try {
+            if (dataCache) return dataCache;
+            const res = await fetch('travel_recommendation_api.json', { cache: 'no-store' });
+            console.log('Respuesta del fetch:', res);
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            console.log('Datos cargados correctamente:', data);
+            dataCache = data;
+            return data;
+        } catch (err) {
+            console.error('Error al obtener datos:', err);
+            throw err;
+        }
+    }
+
     // Cargar y mostrar recomendaciones al iniciar la página
     loadInitialRecommendations();
 
-    function loadInitialRecommendations() {
-        // Mostrar algunas recomendaciones destacadas al cargar la página
-        fetch('travel_recommendation_api.json')
-            .then(response => {
-                console.log('Respuesta del fetch:', response);
-                return response.json();
-            })
-            .then(data => {
-                console.log('Datos cargados correctamente:', data);
-                
-                // Mostrar un destino de cada categoría
-                let featuredResults = [];
-                
-                // Obtener una ciudad destacada
-                if (data.countries && data.countries.length > 0 && data.countries[0].cities.length > 0) {
-                    featuredResults.push(data.countries[0].cities[0]);
-                }
-                
-                // Obtener un templo destacado
-                if (data.temples && data.temples.length > 0) {
-                    featuredResults.push(data.temples[0]);
-                }
-                
-                // Obtener una playa destacada
-                if (data.beaches && data.beaches.length > 0) {
-                    featuredResults.push(data.beaches[0]);
-                }
-                
-                // Mostrar resultados destacados
-                const featuredHeader = document.createElement('h2');
-                featuredHeader.textContent = 'Destinos destacados';
-                featuredHeader.className = 'featured-header';
-                recommendationsDiv.appendChild(featuredHeader);
-                
-                displayResults(featuredResults);
-            })
-            .catch(error => {
-                console.error('Error al cargar los datos iniciales:', error);
-            });
+    async function loadInitialRecommendations() {
+        try {
+            clearActiveClocks();
+            const data = await getData();
+            let featuredResults = [];
+            if (data.countries?.[0]?.cities?.[0]) featuredResults.push(data.countries[0].cities[0]);
+            if (data.temples?.[0]) featuredResults.push(data.temples[0]);
+            if (data.beaches?.[0]) featuredResults.push(data.beaches[0]);
+
+            const featuredHeader = document.createElement('h2');
+            featuredHeader.textContent = 'Destinos destacados';
+            featuredHeader.className = 'featured-header';
+            recommendationsDiv.innerHTML = '';
+            recommendationsDiv.appendChild(featuredHeader);
+            displayResults(featuredResults);
+        } catch (error) {
+            console.error('Error al cargar los datos iniciales:', error);
+            recommendationsDiv.innerHTML = '<div class="no-results">No se pudieron cargar los datos iniciales.</div>';
+        }
     }
 
-    const search = () => {
-        const keyword = searchInput.value.toLowerCase();
+    const search = async () => {
+        const keyword = (searchInput.value || '').toLowerCase().trim();
+        clearActiveClocks();
         recommendationsDiv.innerHTML = '';
 
-        if (keyword.trim() === '') {
+        if (keyword === '') {
             loadInitialRecommendations();
             return;
         }
 
-        fetch('travel_recommendation_api.json')
-            .then(response => response.json())
-            .then(data => {
-                console.log(`Búsqueda para: "${keyword}"`);
-                console.log('Datos del API:', data);
-                
-                let results = [];
+        try {
+            const data = await getData();
+            console.log(`Búsqueda para: "${keyword}"`);
+            let results = [];
 
-                if (keyword === 'beach' || keyword === 'beaches' || keyword === 'playa' || keyword === 'playas') {
-                    results = data.beaches;
-                    console.log('Resultados de playas:', results);
-                } else if (keyword === 'temple' || keyword === 'temples' || keyword === 'templo' || keyword === 'templos') {
-                    results = data.temples;
-                    console.log('Resultados de templos:', results);
-                } else if (keyword === 'country' || keyword === 'countries' || keyword === 'país' || keyword === 'paises') {
-                    // Aplanar todas las ciudades de todos los países
-                    data.countries.forEach(country => {
-                        results.push(...country.cities);
+            if (BEACH_KEYWORDS.has(keyword)) {
+                results = data.beaches || [];
+                console.log('Resultados de playas:', results);
+            } else if (TEMPLE_KEYWORDS.has(keyword)) {
+                results = data.temples || [];
+                console.log('Resultados de templos:', results);
+            } else if (COUNTRY_KEYWORDS.has(keyword)) {
+                (data.countries || []).forEach(country => {
+                    results.push(...(country.cities || []));
+                });
+                console.log('Resultados de países (ciudades):', results);
+            } else {
+                (data.countries || []).forEach(country => {
+                    if (country.name?.toLowerCase().includes(keyword)) {
+                        results.push(...(country.cities || []));
+                    }
+                    (country.cities || []).forEach(city => {
+                        if (city.name?.toLowerCase().includes(keyword)) results.push(city);
                     });
-                    console.log('Resultados de países (ciudades):', results);
-                } else {
-                    // Búsqueda general en todas las categorías
-                    data.countries.forEach(country => {
-                        country.cities.forEach(city => {
-                            if (city.name.toLowerCase().includes(keyword)) {
-                                results.push(city);
-                            }
-                        });
-                    });
-                    data.temples.forEach(temple => {
-                        if (temple.name.toLowerCase().includes(keyword)) {
-                            results.push(temple);
-                        }
-                    });
-                    data.beaches.forEach(beach => {
-                        if (beach.name.toLowerCase().includes(keyword)) {
-                            results.push(beach);
-                        }
-                    });
-                    
-                    console.log('Resultados de búsqueda general:', results);
-                }
+                });
+                (data.temples || []).forEach(temple => {
+                    if (temple.name?.toLowerCase().includes(keyword)) results.push(temple);
+                });
+                (data.beaches || []).forEach(beach => {
+                    if (beach.name?.toLowerCase().includes(keyword)) results.push(beach);
+                });
+                console.log('Resultados de búsqueda general:', results);
+            }
 
-                displayResults(results);
-            })
-            .catch(error => {
-                console.error('Error fetching data:', error);
-                recommendationsDiv.innerHTML = 'Error al cargar las recomendaciones.';
-            });
+            displayResults(results);
+        } catch (error) {
+            console.error('Error en la búsqueda:', error);
+            recommendationsDiv.innerHTML = `<div class="no-results">Error al cargar las recomendaciones: ${error?.message || ''}</div>`;
+        }
     };
 
     const displayResults = (results) => {
@@ -147,6 +176,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const description = document.createElement('p');
             description.textContent = item.description;
+
+            // --- Hora local del destino (opcional) ---
+            const tz = getTimeZoneForItem(item.name);
+            let timeWrapper = null;
+            if (tz) {
+                timeWrapper = document.createElement('div');
+                timeWrapper.className = 'local-time';
+                const label = document.createElement('span');
+                label.textContent = 'Hora local: ';
+                const timeEl = document.createElement('strong');
+                function updateClock() { timeEl.textContent = formatLocalTime(tz); }
+                updateClock();
+                const id = setInterval(updateClock, 1000);
+                activeClocks.push(id);
+                timeWrapper.appendChild(label);
+                timeWrapper.appendChild(timeEl);
+            }
             
             const viewButton = document.createElement('button');
             viewButton.className = 'view-btn';
@@ -157,6 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             content.appendChild(name);
             content.appendChild(description);
+            if (timeWrapper) content.appendChild(timeWrapper);
             content.appendChild(viewButton);
 
             recommendation.appendChild(imageContainer);
@@ -172,10 +219,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const clearResults = () => {
         searchInput.value = '';
+        clearActiveClocks();
         recommendationsDiv.innerHTML = '';
         loadInitialRecommendations();
     };
 
     searchBtn.addEventListener('click', search);
-    clearBtn.addEventListener('click', clearResults);
+    clearBtn.addEventListener('click', () => { searchInput.value = ''; clearActiveClocks(); loadInitialRecommendations(); });
+
+    // Requisito: solo buscar al hacer clic (sin Enter)
 });
